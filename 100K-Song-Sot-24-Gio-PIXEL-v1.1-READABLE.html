@@ -1,0 +1,532 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>100K – Sống sót 24 giờ | Pixel Game</title><style>
+*{box-sizing:border-box}html,body{margin:0;background:#0c1322}body{min-height:100vh;display:flex;align-items:center;justify-content:center}
+main{width:min(100vw,calc(100vh*16/9),1600px)}canvas{width:100%;height:auto;display:block;image-rendering:auto;touch-action:manipulation;outline:none}</style></head><body><main><canvas id="screen" width="1920" height="1080" aria-label="Trò chơi 100K Sống sót 24 giờ. Chọn phương án ngay trong khung game."></canvas></main><script>
+'use strict';
+const $=id=>document.getElementById(id), clamp=(v,a=0,b=100)=>Math.max(a,Math.min(b,v)), money=n=>n.toLocaleString('vi-VN')+'đ';
+const base=()=>({profileId:null,focus:null,memories:[],npc:{boss:50,friend:45,newbie:50,buddy:50},cash:100000,energy:80,health:85,social:50,hunger:15,bossTrust:50,coworkerTrust:45,phoneBattery:18,debt:0,transport:null,lateToWork:false,mealSkipped:false,promises:0,coffee:0,skips:0,risks:0,flags:{},history:[],log:[],index:0,phase:'choice',last:null});let s=base();
+const PROFILES=[
+{id:'new',name:'NHÂN VIÊN MỚI',desc:'Mới vào công ty, ai cũng lạ. Sếp chưa nhớ tên bạn.',fx:{energy:5,social:-12,bossTrust:-12,coworkerTrust:-8},perk:'Dễ được thông cảm, khó nhờ đồng nghiệp.'},
+{id:'veteran',name:'NHÂN VIÊN LÂU NĂM',desc:'Bạn biết mọi ngóc ngách, và mọi người đều biết nhờ bạn.',fx:{energy:-10,social:15,bossTrust:12,coworkerTrust:15},perk:'Được tin tưởng, nhưng dễ bị giao thêm việc.'},
+{id:'probation',name:'NHÂN VIÊN THỬ VIỆC',desc:'Bạn đang cố chứng minh bản thân trong mỗi tin nhắn của sếp.',fx:{bossTrust:-18,social:-5},perk:'Giúp sếp được cộng uy tín nhiều hơn.'},
+{id:'burnout',name:'NHÂN VIÊN KIỆT SỨC',desc:'Deadline tuần này dài như một bộ phim nhiều tập.',fx:{energy:-30,health:-18},perk:'Nghỉ ngơi hiệu quả hơn, quá sức dễ gặp hạn.'}
+];
+const FOCUSES=[{id:'money',name:'GIỮ TIỀN',desc:'Tiết kiệm hôm nay, ngày mai tính sau.'},{id:'health',name:'GIỮ SỨC',desc:'Sức khỏe là thứ không thể trả góp.'},{id:'social',name:'GIỮ QUAN HỆ',desc:'Một miếng khi đói bằng một gói khi no.'},{id:'boss',name:'LẤY LÒNG SẾP',desc:'Hôm nay tôi sẽ được ghi nhận!'}];
+const profile=()=>PROFILES.find(p=>p.id===s.profileId)||PROFILES[0];
+const focus=()=>FOCUSES.find(f=>f.id===s.focus)||FOCUSES[0];
+function initProfile(id){s=base();s.profileId=id;s.phase='setupFocus';apply(PROFILES.find(p=>p.id===id).fx);save();render()}
+function initFocus(id){s.focus=id;s.phase='choice';s.log.unshift('07:00 · '+profile().name+' · chiến lược '+focus().name);save();render()}
+function remember(text,kind='memory'){s.memories.unshift({time:events[s.index].time,text,kind});if(s.memories.length>30)s.memories.pop()}
+function relationship(choice,outcome){
+ const id=choice.id;
+ if(['share_lunch','charge','contribute','socialize'].includes(id))s.npc.friend=clamp(s.npc.friend+8);
+ if(['refuse','pretend','ignore'].includes(id))s.npc.friend=clamp(s.npc.friend-5);
+ if(['help_boss','work','negotiate'].includes(id))s.npc.boss=clamp(s.npc.boss+8);
+ if(['pretend','nap'].includes(id))s.npc.boss=clamp(s.npc.boss-7);
+ if(id==='share_lunch'&&outcome.id==='kind'){s.flags.lunchFavor=true;remember('Đồng nghiệp đã chia cơm cho bạn. Bạn ghi nhớ ân tình này.','bond')}
+ if(id==='help_boss'){s.flags.helpedBoss=true;remember('Bạn nhận việc khó từ sếp, dù chưa biết sẽ phải trả giá gì.','work')}
+ if(id==='promise'){s.flags.fundPromise=true;remember('Bạn hứa đóng quỹ sau. Một lời hứa chưa được thực hiện.','promise')}
+ if(id==='refuse'){s.flags.fundRefused=true;remember('Bạn đã nói thật rằng mình đang kẹt tiền.','bond')}
+ if(id==='skip_breakfast'||id==='skip_lunch')remember('Bạn bỏ một bữa ăn để giữ lại tiền.','health');
+ if(id==='bus'||id==='walk'||id==='bike'||id==='ride')remember('Bạn chọn phương tiện đi làm: '+choice.text+'.','travel');
+ if(outcome.id==='caught'||outcome.id==='late')remember('Một sự cố khiến ngày công sở bớt êm đềm.','twist');
+}
+function contextualOutcome(choice,outcome){
+ if(s.flags.lunchFavor&&s.index===6&&choice.id==='refuse')return { ...outcome,id:'understood_favor',msg:'Người đã chia cơm trưa nói đỡ: “Để bạn ấy đóng sau cũng được!”',fx:{coworkerTrust:8,social:6}};
+ if(s.flags.helpedBoss&&s.index===7&&choice.id==='walk_home')return {...outcome,id:'boss_ride',msg:'Sếp nhớ bạn đã giúp buổi sáng và tiện đường cho bạn đi nhờ. Vừa tiết kiệm vừa bất ngờ!',fx:{energy:12,bossTrust:5}};
+ if(s.flags.fundRefused&&s.index===8&&choice.id==='socialize')return {...outcome,id:'awkward_fund',msg:'Bạn vừa từ chối đóng quỹ nhưng lại xuất hiện ở quán nước. Đồng nghiệp trêu bạn cả tối.',fx:{social:-9}};
+ if(s.mealSkipped&&s.flags.skippedBreakfast&&s.index===5&&choice.id==='work')return {...outcome,id:'hungry_work',msg:'Nhịn hai bữa khiến bạn gõ nhầm công thức Excel. Cả phòng nghe tiếng bụng réo.',fx:{energy:-12,health:-8}};
+ if(s.profileId==='veteran'&&s.index===3&&choice.id==='help_boss')return {...outcome,id:'extra_work',msg:'Sếp tin bạn đến mức giao luôn việc của cả nhóm. Danh tiếng đôi khi là lời nguyền.',fx:{energy:-12,bossTrust:7}};
+ return outcome;
+}
+function contextualEffects(choice){const fx={};if(s.focus==='money'&&choice.cost===0)fx.energy=2;if(s.focus==='health'&&['rest','sleep','nap','cook','lunch'].includes(choice.id))fx.health=5;if(s.focus==='social'&&['share_lunch','socialize','contribute','charge'].includes(choice.id))fx.coworkerTrust=6;if(s.focus==='boss'&&['help_boss','work','negotiate'].includes(choice.id))fx.bossTrust=7;if(s.profileId==='probation'&&choice.id==='help_boss')fx.bossTrust=(fx.bossTrust||0)+7;if(s.profileId==='burnout'&&['rest','sleep','nap'].includes(choice.id))fx.energy=10;return fx}
+const E=(id,text,cost,fx,results,extra={})=>({id,text,cost,fx,results,...extra});
+const O=(id,weight,msg,fx={},extra={})=>({id,weight,msg,fx,...extra});
+const events=[
+{time:'07:00',place:'room',title:'Bữa sáng hay giữ tiền?',desc:'Bạn thức dậy. Ví còn đúng 100.000đ, bụng thì biểu tình đòi tăng lương.',choices:()=>[
+ E('breakfast','Mua bánh mì trứng',20000,{energy:10,health:4,hunger:-25},[O('tasty',75,'Bánh mì nóng giòn. Cuộc đời tạm thời có ý nghĩa.'),O('spicy',25,'Cô bán hàng cho thêm ớt. Bạn tỉnh hơn cả uống cà phê.',{energy:5})]),
+ E('skip_breakfast','Nhịn ăn để tiết kiệm',0,{energy:-7,hunger:28,skips:1},[O('ok',75,'Bạn đi làm với niềm tin rằng no là một trạng thái tinh thần.'),O('stomach',25,'Bụng réo như chuông báo cháy.',{social:-4})],{after:()=>s.flags.skippedBreakfast=true}),
+ E('home_water','Uống nước lọc và ăn bánh quy còn sót',0,{energy:2,hunger:-9},[O('crumbs',80,'Bánh quy hơi ỉu, nhưng ít nhất nó miễn phí.'),O('expired',20,'Bánh quy có mùi đáng ngờ. Bạn quyết định bỏ phần còn lại.',{health:-3})])]},
+{time:'08:15',place:'street',title:'Cuộc đua đến công ty',desc:'Đường bắt đầu đông. Bạn chọn phương tiện nào để đi làm?',choices:()=>[
+ E('bus','Đi xe buýt',7000,{energy:-5},[O('ontime',60,'Xe đến đúng giờ. Bạn cảm thấy mình đã thắng hệ thống.'),O('late',25,'Xe buýt kẹt đường. Sếp đã xem đồng hồ ba lần.',{bossTrust:-10,social:-4},{after:()=>s.lateToWork=true}),O('pickpocket',15,'Một kẻ móc túi lấy mất 15.000đ tiền lẻ.',{cash:-15000,risks:1})],{after:()=>s.transport='bus',hint:'25% đến muộn · 15% mất 15K'}),
+ E('walk','Đi bộ đến công ty',0,{energy:-16,hunger:8},[O('fine',65,'Bạn đến nơi, chân mỏi nhưng ví còn nguyên.'),O('late',25,'Đèn đỏ dài như cuộc họp thứ Hai.',{bossTrust:-8},{after:()=>s.lateToWork=true}),O('gift',10,'Nhặt được phiếu giảm giá đồ uống hợp lệ.',{},{after:()=>s.flags.coupon=true})],{after:()=>s.transport='walk',hint:'25% đến muộn · 10% nhận coupon'}),
+ E('bike','Đi xe máy cá nhân',12000,{energy:-4},[O('smooth',70,'Xe chạy êm. Bạn tới văn phòng như một huyền thoại.'),O('late',20,'Đường tắc cứng, bạn tới muộn.',{bossTrust:-8},{after:()=>s.lateToWork=true}),O('flat',10,'Lốp xe có dấu hiệu non hơi.',{},{after:()=>s.flags.bikeIssue=true})],{after:()=>s.transport='bike',hint:'20% đến muộn · 10% vấn đề lốp'}),
+ E('ride','Gọi xe công nghệ',32000,{energy:3},[O('fine',80,'Bạn tới nơi khô ráo và khá sang chảnh.'),O('chatty',20,'Tài xế kể chuyện đời suốt chuyến. Bạn vừa cảm động vừa mệt.',{energy:-7})],{after:()=>s.transport='ride'})]},
+{time:'09:30',place:'office',title:'Điện thoại còn 8% pin',desc:'Màn hình nhấp nháy cảnh báo. Một tin nhắn công việc vừa tới.',choices:()=>[
+ E('charge','Mượn sạc đồng nghiệp',0,{phoneBattery:55},[O('yes',70,'Đồng nghiệp cho mượn sạc. Tình người còn đó.',{coworkerTrust:5}),O('awkward',30,'Bạn phải nghe câu chuyện dài 10 phút về dây sạc.',{energy:-5})]),
+ E('powerbank','Mua cáp sạc ở cửa hàng',25000,{phoneBattery:65},[O('good',85,'Điện thoại hồi sinh.'),O('bad',15,'Cáp sạc chập chờn. Vẫn dùng được nhưng rất khó chịu.',{energy:-6})]),
+ E('ignore','Bật tiết kiệm pin, mặc kệ',0,{phoneBattery:-10},[O('survive',70,'Bạn tắt mạng xã hội. Pin kéo dài thêm chút.'),O('dead',30,'Điện thoại sập nguồn ngay khi sếp nhắn.',{bossTrust:-9},{after:()=>s.flags.phoneDead=true})],{hint:'30% điện thoại sập nguồn'})]},
+{time:'11:00',place:'office',title:'Sếp nhắn: “Em rảnh không?”',desc:()=>s.lateToWork?'Bạn vừa tới muộn. Sếp đứng ngay sau lưng, tay cầm một tập giấy.':'Sếp nhắn ba chữ ngắn ngủi nhưng có sức công phá tâm lý cực mạnh.',choices:()=>[
+ E('help_boss','Nhận việc và hỏi rõ deadline',0,{energy:-12,bossTrust:14},[O('praise',65,'Sếp gật gù: “Tinh thần tốt.”'),O('more',35,'Sếp vui quá giao thêm một file. Được tin tưởng đôi khi rất mệt.',{energy:-10})]),
+ E('negotiate','Thương lượng lại khối lượng',0,{bossTrust:4,social:4},[O('fair',65,'Sếp đồng ý lùi hạn.'),O('urgent',35,'Sếp nói: “Cũng không gấp, chỉ cần trước 12 giờ.”',{energy:-10})]),
+ E('pretend','Giả vờ đang họp online',0,{bossTrust:-7},[O('works',55,'Sếp đi qua. Bạn thở phào.'),O('caught',45,'Sếp hỏi: “Sao màn hình em đang mở bảng tính?”',{social:-12,bossTrust:-10})],{hint:'45% bị phát hiện'})]},
+{time:'12:00',place:'food',title:'Bữa trưa: ăn hay sống?',desc:'Đồng nghiệp rủ ăn cơm. Bạn nhìn bảng giá rồi nhìn số dư.',choices:()=>[
+ E('lunch','Ăn cơm đầy đủ',35000,{energy:17,health:8,hunger:-55},[O('good',70,'Cơm nóng và rau luộc cứu lấy buổi trưa.'),O('bond',30,'Bạn gặp đồng nghiệp ở quán, tám chuyện rất hợp.',{coworkerTrust:12,social:7})]),
+ E('skip_lunch','Nhịn ăn, uống nước lọc',0,{energy:-12,hunger:40,skips:1},[O('hold',70,'Bạn tuyên bố đang “ăn kiêng tài chính”.'),O('weak',30,'Bạn hoa mắt khi nhìn Excel.',{energy:-12,health:-6})],{after:()=>s.mealSkipped=true,hint:'30% tụt sức mạnh'}),
+ E('share_lunch','Xin chia đồ ăn với đồng nghiệp',0,{social:-2},[O('kind',75,'Đồng nghiệp chia nửa suất cơm. Một ân tình được ghi nhớ.',{energy:10,hunger:-28,coworkerTrust:8},{after:()=>s.flags.sharedLunch=true}),O('refused',25,'Họ vừa ăn hết. Bạn cười gượng.',{social:-8,hunger:10})],{requires:()=>s.coworkerTrust>=45,hint:'25% không còn đồ ăn'}),
+ E('cheap_lunch','Mua bánh mì 12K',12000,{energy:8,hunger:-25},[O('fine',85,'Bữa trưa gọn nhẹ, đủ qua cơn đói.'),O('discount',15,'Cô bán hàng tặng thêm miếng chả.',{health:3})])]},
+{time:'14:30',place:'office',title:'Cơn buồn ngủ công sở',desc:()=>s.hunger>=65?'Mắt bạn hoa lên vì đói. Những ô Excel bắt đầu giống những chiếc bánh bao.':'Mí mắt nặng như báo cáo cuối quý.',choices:()=>[
+ E('coffee','Mua cà phê',20000,{energy:20,coffee:1},[O('awake',75,'Bạn tỉnh như sáo.'),O('shaky',25,'Caffeine khiến tay bạn run khi rê chuột.',{health:-5})]),
+ E('nap','Chợp mắt 10 phút',0,{energy:12,bossTrust:-2},[O('fine',65,'Bạn hồi pin thành công.'),O('caught',35,'Sếp đi ngang đúng lúc bạn ngáy một nốt nhạc.',{bossTrust:-10,social:-6})],{hint:'35% bị sếp bắt gặp'}),
+ E('work','Cố làm tiếp',0,{energy:-15,bossTrust:5},[O('focus',65,'Bạn hoàn thành được một phần công việc.'),O('mistake',35,'Bạn gửi file “final_final_đừng_sửa_nữa.xlsx” nhầm nhóm.',{social:-9,bossTrust:-6})])]},
+{time:'16:00',place:'office',title:'Quỹ sinh nhật đồng nghiệp 30K',desc:()=>s.flags.sharedLunch?'Người vừa chia cơm cho bạn sáng nay đang cầm danh sách đóng quỹ.':'Nhóm chat nhảy tin: “Mọi người đóng quỹ 30K nha!”',choices:()=>[
+ E('contribute','Đóng quỹ 30.000đ',30000,{social:12,coworkerTrust:12},[O('happy',80,'Bạn được gắn sticker trái tim trong nhóm.'),O('more',20,'Bạn còn bị giao nhiệm vụ viết lời chúc.',{energy:-6})]),
+ E('refuse','Nói thật là đang kẹt tiền',0,{social:-4},[O('understand',70,'Mọi người thông cảm. Bạn thở phào.',{coworkerTrust:2}),O('awkward',30,'Nhóm chat im lặng ba giây dài như ba năm.',{social:-9})],{hint:'30% tình huống ngượng'}),
+ E('promise','Hứa cuối tuần đóng bù',0,{promises:1},[O('ok',75,'Đồng nghiệp ghi tên bạn vào cột “nợ quỹ”.'),O('remind',25,'Họ gửi lịch nhắc nợ tự động.',{social:-3})],{after:()=>s.flags.fundPromise=true})]},
+{time:'17:00',place:'street',title:'Đường về không dễ như bạn nghĩ',desc:()=>({bus:'Bạn đã đi xe buýt sáng nay. Trời lất phất mưa và trạm xe đông nghẹt.',walk:'Sáng nay bạn đi bộ. Giờ chân bắt đầu phản đối.',bike:'Chiếc xe máy của bạn đang chờ dưới hầm gửi xe.',ride:'Sáng nay bạn đi xe công nghệ. Chiều nay giá cước tăng.'}[s.transport]||'Bạn phải tìm cách về nhà.'),choices:()=>{
+ let a=[E('walk_home','Đi bộ về, tiết kiệm tối đa',0,{energy:-24,health:-4},[O('fine',75,'Bạn về đến nhà với đôi chân như mì sợi.'),O('rain',25,'Mưa ập xuống. Bạn ướt như vừa quay MV thất tình.',{health:-7})],{hint:'25% gặp mưa'}),E('ride_home','Gọi xe công nghệ',35000,{energy:4},[O('fast',75,'Bạn về nhà nhanh và khô ráo.'),O('surge',25,'Tài xế tới trễ. Bạn mất thêm năng lượng chờ đợi.',{energy:-8})],{requires:()=>s.phoneBattery>0})];
+ if(s.transport==='bus')a.unshift(E('bus_home','Chờ xe buýt',7000,{energy:-8},[O('seat',65,'Bạn tìm được ghế ngồi, một kỳ tích.'),O('crowd',35,'Xe đông như hộp cá mòi.',{energy:-9})]));
+ if(s.transport==='bike')a.unshift(E('bike_home','Lấy xe máy về',12000,{energy:-5},s.flags.bikeIssue?[O('repair',55,'Lốp non hơi khiến bạn phải ghé bơm, tốn thêm 5K.',{cash:-5000}),O('fine',45,'Bạn bơm lốp miễn phí ở chỗ quen.')]:[O('fine',80,'Bạn về an toàn.'),O('rain',20,'Mưa bất chợt làm bạn chậm hơn.',{energy:-7})]));
+ if(s.transport==='walk')a.unshift(E('shortcut','Đi bộ đường tắt',0,{energy:-16},[O('short',70,'Đường tắt hiệu quả bất ngờ.'),O('lost',30,'Bạn đi lạc qua ba ngõ giống hệt nhau.',{energy:-10})]));
+ if(s.transport==='ride')a.unshift(E('bus_switch','Đổi sang xe buýt',7000,{energy:-9},[O('good',70,'Bạn đi xe buýt chiều để cứu ví.'),O('crowded',30,'Xe đông, bạn đứng suốt chặng.',{energy:-8})]));return a;}},
+{time:'19:00',place:'street',title:'Lời mời xã giao bất ngờ',desc:()=>s.flags.fundPromise?'Đồng nghiệp nhắn: “Nhớ vụ quỹ nha”, rồi tiện thể rủ đi ăn tối.':'Một đồng nghiệp nhắn: “Ra uống nước xíu không?” Chữ “xíu” có vẻ rất đáng ngờ.',choices:()=>[
+ E('socialize','Đi gặp mọi người',25000,{social:12,coworkerTrust:8,energy:-7},[O('fun',70,'Buổi gặp vui hơn mong đợi.'),O('extra',30,'Bạn bị kéo vào một cuộc thi kể chuyện công sở.',{energy:-8,social:5})]),
+ E('decline','Từ chối khéo để về nghỉ',0,{energy:8,social:-2},[O('fine',75,'Bạn được nằm nghỉ trong yên bình.'),O('guilt',25,'Bạn thấy ảnh cả nhóm đăng story và hơi chạnh lòng.',{social:-4})]),
+ E('borrow','Vay đồng nghiệp 20K để đi cùng',0,{cash:20000,debt:20000,social:4},[O('yes',75,'Đồng nghiệp chuyển khoản ngay. Bạn ghi nhớ món nợ.'),O('lecture',25,'Bạn nhận được 20K cùng một bài giảng quản lý chi tiêu.',{energy:-6})],{requires:()=>s.coworkerTrust>=55})]},
+{time:'21:00',place:'room',title:'Cơ thể gửi đơn khiếu nại',desc:()=>s.hunger>=65?'Bụng đói, chân mỏi, đầu óc quay cuồng. Bạn phải xử lý ngay.':'Sau một ngày dài, cơ thể muốn nghỉ ngơi. Điện thoại vẫn nhấp nháy.',choices:()=>[
+ E('rest','Uống nước, nằm nghỉ và thở đều',0,{energy:14,health:5,hunger:4},[O('recover',80,'Bạn hồi phục một chút.'),O('dream',20,'Bạn mơ thấy sếp giao việc qua giấc ngủ.',{social:-2})]),
+ E('cook','Nấu mì gói ở nhà',8000,{energy:7,health:2,hunger:-38},[O('warm',85,'Bát mì nóng cứu rỗi buổi tối.'),O('spill',15,'Bạn làm đổ chút nước mì. Cuộc đời chưa buông tha.',{energy:-5})]),
+ E('scroll','Cố lướt điện thoại để quên mệt',0,{energy:-10,phoneBattery:-12},[O('meme',70,'Bạn cười được ba lần, nhưng vẫn mệt.'),O('doom',30,'Bạn lướt một tiếng không biết từ bao giờ.',{energy:-9})])]},
+{time:'21:30',place:'room',title:'Cám dỗ cuối ngày',desc:'Ứng dụng giao đồ ăn nhấp nháy: “Deal chỉ dành cho bạn!” Nhưng bạn vẫn còn ngày mai.',choices:()=>[
+ E('night_food','Đặt đồ ăn đêm',30000,{energy:7,health:5,hunger:-35},[O('tasty',65,'Đồ ăn tới. Bạn cảm thấy được chữa lành.'),O('fee',35,'Mã giảm giá không áp dụng phí ship. Vũ trụ cười vào ví bạn.',{cash:-5000})],{requires:()=>s.phoneBattery>0,hint:'35% phát sinh 5K phí ship'}),
+ E('sleep','Tắt máy đi ngủ',0,{energy:20,health:8},[O('peace',75,'Bạn ngủ ngon. Một quyết định trưởng thành.'),O('boss',25,'Sếp gửi tin lúc 23:58. May mà bạn đã tắt thông báo.',{bossTrust:-2})]),
+ E('coupon','Săn mã giảm giá đến cùng',0,{energy:-8,phoneBattery:-8},[O('win',35,'Bạn săn được voucher 10K cho ngày mai.',{},{after:()=>s.flags.coupon=true}),O('fail',65,'Mã hết lượt đúng khi bạn bấm áp dụng. Không ai ngạc nhiên.')],{requires:()=>s.phoneBattery>0,hint:'35% nhận voucher, 65% hụt'})]},
+{time:'24:00',place:'room',title:'Ngày hôm nay đã kết thúc',desc:'Đã đến lúc xem bạn sống sót như thế nào.',choices:()=>[]}
+];
+const keys=['cash','energy','health','social','hunger','bossTrust','coworkerTrust','phoneBattery','debt','promises','coffee','skips','risks'];
+function apply(fx={}){for(const [k,v] of Object.entries(fx)){if(!keys.includes(k))throw Error('Unknown stat '+k);s[k]+=v;}for(const k of ['energy','health','social','hunger','bossTrust','coworkerTrust','phoneBattery'])s[k]=clamp(s[k]);s.cash=Math.max(0,s.cash);s.debt=Math.max(0,s.debt)}
+function valid(c){return c.cost<=s.cash&&(!c.requires||c.requires())}
+function pick(outcomes){const eligible=outcomes.filter(o=>!o.requires||o.requires());if(!eligible.length)throw Error('No outcome');let roll=Math.random()*eligible.reduce((a,o)=>a+o.weight,0);for(const o of eligible){roll-=o.weight;if(roll<0)return o}return eligible.at(-1)}
+function choose(id){const ev=events[s.index],c=ev.choices().find(x=>x.id===id);if(!c||!valid(c)||s.phase!=='choice')return;const b0={...s};apply({cash:-c.cost,...c.fx});if(c.after)c.after();const o=contextualOutcome(c,pick(c.results));apply(o.fx);apply(contextualEffects(c));if(o.after)o.after();relationship(c,o);remember(o.msg,'event');s.history.push({time:ev.time,choice:c.id,outcome:o.id,desc:c.text});s.log.unshift(ev.time+' · '+o.msg);const delta={};for(const k of['cash','energy','health','social','hunger','bossTrust','coworkerTrust','phoneBattery']){const d=s[k]-b0[k];if(d)delta[k]=d}s.last={choice:c,outcome:o,delta};s.phase='result';render()}
+function advance(){if(s.phase!=='result')return;if(s.index===4&&s.mealSkipped&&s.hunger>65)s.log.unshift('⚠ Bỏ bữa trưa: buổi chiều sẽ khó khăn hơn.');if(s.index===9&&s.hunger>=80){apply({energy:-9,health:-7});s.log.unshift('⚠ Đói kéo dài khiến sức khỏe và năng lượng giảm.')}s.index++;s.phase=s.index===events.length-1?'end':'choice';render()}
+function ending(){if(s.health<=15||s.energy<=10)return ['🧟 Xác sống deadline','Bạn sống sót, nhưng chiếc ghế sofa mới là người chiến thắng.'];if(s.debt>=20000)return ['💸 Vua nợ đồng nghiệp','Một ngày qua đi, khoản nợ vẫn còn nguyên.'];if(s.skips>=2&&s.cash>=50000)return ['🥖 Đại gia khổ hạnh','Bạn giữ được tiền, nhưng cái bụng muốn biểu tình.'];if(s.bossTrust>=72)return ['🧑‍💼 Con cưng của sếp','Bạn đã đánh đổi sức lực lấy niềm tin của cấp trên.'];if(s.social>=75&&s.cash<=15000)return ['😎 Idol công sở','Ai cũng quý bạn, trừ tài khoản ngân hàng.'];if(s.promises>=1)return ['🎭 Nghệ sĩ ngoại giao','Bạn khéo ăn nói đến mức lời hứa cũng cần trả góp.'];if(s.cash>=45000&&s.health>=65&&s.energy>=45)return ['🏆 Chiến thần sinh tồn','Giữ được ví, sức khỏe và tinh thần: quá đáng nể.'];if(s.risks>=2)return ['🚌 Nạn nhân vận may','Vũ trụ thử thách bạn nhiều hơn mức cần thiết.'];if(s.cash<=5000)return ['🪙 Ví rỗng, tim đầy','Bạn đã tiêu gần hết nhưng vẫn còn câu chuyện để kể.'];return ['🌙 Người sống sót bình thường','Không giàu, không thảm họa. Một ngày bình thường cũng đáng tự hào.']}
+
+/* ================= PIXEL RENDERER (toàn bộ vẽ bằng code, không dùng ảnh) ================= */
+const W=960,H=540,S=4;
+const canvas=document.getElementById('screen'),ctx=canvas.getContext('2d');ctx.setTransform(2,0,0,2,0,0);
+const saveKey='100k_canvas_profiles_v10';
+const hit=[];let hoverKey='',frame=0,ui=null;
+ctx.imageSmoothingEnabled=false;
+
+/* ---------- helpers ---------- */
+const R=(x,y,w,h,c)=>{ctx.fillStyle=c;ctx.fillRect(x*S,y*S,w*S,h*S)};          // theo lưới cảnh (4px)
+const Rp=(x,y,w,h,c)=>{ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),Math.round(w),Math.round(h))}; // theo px
+function disc(cx,cy,r,c){ctx.fillStyle=c;for(let y=-r;y<=r;y++){const w=Math.floor(Math.sqrt(r*r-y*y)+.5);ctx.fillRect((cx-w)*S,(cy+y)*S,(2*w+1)*S,S)}}
+function rng(seed){let a=seed;return()=>{a=(a*1664525+1013904223)>>>0;return a/4294967296}}
+const clean=t=>String(t).replace(/[\u2190-\u21FF\u2600-\u27BF\uFE0F\u200D\u{1F000}-\u{1FAFF}]/gu,'').replace(/\s+/g,' ').trim();
+
+/* ---------- chữ mượt, hỗ trợ dấu tiếng Việt, không rasterize alpha ---------- */
+const FONT='system-ui, "Segoe UI", Arial, sans-serif';
+const tcache=new Map(),mctx=document.createElement('canvas').getContext('2d');
+function mw(str,size){mctx.font=`600 ${size}px ${FONT}`;return mctx.measureText(String(str)).width}
+function T(str,x,y,size=20,color='#fff',align='left',out=null,maxW=0){
+ str=clean(str);if(!str)return 0;
+ let fs=size;if(maxW)while(fs>12&&mw(str,fs)>maxW)fs--;
+ ctx.save();ctx.font=`${fs>=24?800:650} ${fs}px ${FONT}`;
+ ctx.textBaseline='middle';ctx.textAlign=align;
+ if(out){ctx.lineJoin='round';ctx.lineWidth=2.6;ctx.strokeStyle=out;ctx.strokeText(str,x,y)}
+ ctx.fillStyle=color;ctx.fillText(str,x,y);ctx.restore();return mw(str,fs)
+}
+function lines(str,maxW,size){const words=clean(str).split(' '),rows=[];let cur='';
+ for(const word of words){const test=cur?cur+' '+word:word;
+  if(mw(test,size)>maxW&&cur){rows.push(cur);cur=word}else cur=test;
+  if(mw(cur,size)>maxW){let piece='';for(const ch of cur){if(mw(piece+ch,size)>maxW&&piece){rows.push(piece);piece=ch}else piece+=ch}cur=piece}
+ }
+ if(cur)rows.push(cur);return rows}
+function WT(str,x,y,maxW,size,lh,color,align='left',out=null,maxLines=9){
+ const rows=lines(str,maxW,size).slice(0,maxLines);rows.forEach((r,i)=>T(r,x,y+i*lh,size,color,align,out));return rows.length}
+
+/* ---------- khung pixel có góc cắt bậc thang ---------- */
+function notch(x,y,w,h,n){ctx.fillRect(x+n,y,w-2*n,h);ctx.fillRect(x,y+n,w,h-2*n);ctx.fillRect(x+n/2,y+n/2,w-n,h-n)}
+function panel(x,y,w,h,fill,border,o={}){
+  const n=o.n??4,b=o.bw??2;
+  if(o.sh){ctx.fillStyle=o.sh;notch(x+2,y+4,w,h,n)}
+  ctx.fillStyle=border;notch(x,y,w,h,n);
+  ctx.fillStyle=fill;notch(x+b,y+b,w-2*b,h-2*b,Math.max(2,n-b));
+  if(o.hi){ctx.fillStyle=o.hi;ctx.fillRect(x+b+n,y+b,w-2*b-2*n,2)}
+  if(o.lo){ctx.fillStyle=o.lo;ctx.fillRect(x+b+n,y+h-b-2,w-2*b-2*n,2)}}
+function addHit(x,y,w,h,action){hit.push({x,y,w,h,action,key:x+','+y})}
+const isHover=(x,y)=>hoverKey===x+','+y;
+
+/* ---------- sprite ---------- */
+const CM={k:'#2a2036',w:'#ffffff',y:'#ffd438',o:'#f4a915',r:'#e8344a',p:'#ff7296',g:'#51dc9c',G:'#2e9e6a',b:'#4aa3ff',B:'#2b5fbf',n:'#a0622d',s:'#ffd9b0',c:'#fff8e8',e:'#9aa3b5',E:'#5d6577',v:'#8f6bff',d:'#6b3f1d'};
+const SPR={};
+function def(name,rows){const w=Math.max(...rows.map(r=>r.length));SPR[name]={rows:rows.map(r=>r.padEnd(w,'.')),w,h:rows.length}}
+function spr(name,x,y,sc=2,map=null){const sp=SPR[name];if(!sp)return;
+  for(let r=0;r<sp.h;r++)for(let c=0;c<sp.w;c++){const ch=sp.rows[r][c];if(ch==='.')continue;const col=(map&&map[ch])||CM[ch];if(!col)continue;ctx.fillStyle=col;ctx.fillRect(Math.round(x+c*sc),Math.round(y+r*sc),sc,sc)}}
+const sw=(name,sc)=>SPR[name].w*sc, sh=(name,sc)=>SPR[name].h*sc;
+def('money',[".kkkkkkkkk.","kgggggggggk","kgGGgyyGGgk","kgGgyoyyGgk","kgGGgyyGGgk","kgggggggggk",".kkkkkkkkk."]);
+def('bolt',[".....kk..","....kyyk.","...kyyk..","..kyyk...",".kyyyyyk.",".kkkyyk..","....kyk..","...kyk...","...kk...."]);
+def('heart',[".kkk.kkk.","krrrkrrrk","krwrrrrrk","krwrrrrrk",".krrrrrk.","..krrrk..","...krk...","....k...."]);
+def('smile',["..kkkkkk..",".kyyyyyyk.","kyyyyyyyyk","kkkkkkkkkk","kkEkkkkEkk","kyyyyyyyyk","kyykkkkyyk",".kyyyyyyk.","..kkkkkk.."]);
+def('book',[".kkkk.kkkk.","kcccckcccck","kcEEckcEEck","kcccckcccck","kcEEckcEEck","kcccckcccck","kbbbbkbbbbk",".kkkk.kkkk."]);
+def('trophy',[".kkkkkkk.","kyyywyyyk","kyyywyyyk",".kyyyyyk.","..kyyyk..","...kyk...","...kyk...","..kooook.",".kkkkkkk."]);
+def('gear',["...kkk...",".kkEEEkk.",".kEEEEEk.","kEEkkkEEk","kEEk.kEEk","kEEkkkEEk",".kEEEEEk.",".kkEEEkk.","...kkk..."]);
+def('calendar',["..k......k..","kkkkkkkkkkkk","krrrrrrrrrrk","krrrrrrrrrrk","kcccccccccck","kcEEcEEcEEck","kcEEcEEcEEck","kcccccccccck","kcEEcEEcEEck","kcEEcEEcEEck","kcccccccccck","kkkkkkkkkkkk"]);
+def('bed',["kk.........","knkkkkkkkk.","knkwwkppppk","knkwwkppppk","knnnnnnnnnk","knnnnnnnnnk","kn.......nk","kk.......kk"]);
+def('bus',[".kkkkkkkkk.","kbbbbbbbbbk","kwwkwwkwwbk","kwwkwwkwwbk","kbbbbbbbbbk","kyybbbbbyyk","kbbbbbbbbbk",".kkEkkkEkk.","..kkk.kkk.."]);
+def('phone',[".kkkkk.","kEEEEEk","kbbbbbk","kbrrrbk","kbbbbbk","kbwwwbk","kbbbbbk","kEEEEEk","kEEkEEk",".kkkkk."]);
+def('boss',["..kkkkk..",".knnnnnk.","knnnnnnnk","ksssssssk","ksksssksk","ksssssssk","kssskkssk",".ksssssk.","..kkkkk.."]);
+def('bowl',["...gg.yy..","..gggggyg.",".ggrggyggg","kkkkkkkkkk","kcccccccck",".kcccccck.","..kkkkkk.."]);
+def('coffee',["..e.e....","...e.e...","kkkkkkk..","kcnnnckk.","kcnnnck.k","kcnnnck.k",".kcccckk.","..kkkkk.."]);
+def('cake',["..y.y.y..","..k.k.k..","kkkkkkkkk","kwwwwwwwk","kpwpwpwpk","kpppppppk","kccccccck","kkkkkkkkk"]);
+def('house',["....rr....","...rrrr...","..rrrrrr..",".rrrrrrrr.","kkkkkkkkkk",".cccccccc.",".cbbccnnc.",".cbbccnnc.",".cccccnnc.","kkkkkkkkkk"]);
+def('beer',[".wwwwww...","kkkkkkk...","kyyyyykkk.","kywyyykyk.","kyyyyykyk.","kyyyyykkk.","kyyyyyk...",".kkkkk...."]);
+def('bag',["..kkkkk..",".k.....k.",".k.....k.","kkkkkkkkk","kvvvvvvvk","kvvpppvvk","kvvvpvvvk","kvvvvvvvk","kvvvvvvvk","kkkkkkkkk"]);
+def('moon',["..kkkk...",".kyyykk..","kyyyk....","kyyk.....","kyyk.....","kyyyk..k.",".kyyyykk.","..kkkk..."]);
+def('check',[".......","......g",".....gg","g...gg.","gg.gg..",".ggg...","..g...."]);
+def('coin',["...kkkk...","..kyyyyk..",".kywyyyok.","kyywkkyyok","kyyykkyyok",".kyyyyyok.","..kyyyok..","...kkkk..."]);
+def('arrow',["....k...","....kk..","kkkkkkk.","kkkkkkkk","kkkkkkk.","....kk..","....k..."]);
+def('hand',["...kk......","..kwwk.....","..kwwk.....","..kwwk.....","..kwwkkkk..",".kkwwkwwwkk","kwwkwwwwwwk","kwwwwwwwwwk",".kwwwwwwwk.","..kwwwwwk..","..kkkkkkk.."]);
+def('cat',["..kk..kk......",".kookkook.....",".kowwwwok.....",".kowkwkok.....",".koowpwook....","kkooooooooookk",".koooowwoooook",".kkkkkkkkkkkk."]);
+def('A',["..y..",".y.y.","yyyyy","y...y","y...y"]);
+def('plant',["..G.G.G..",".GgGGgGgG.","GgGGGGGgG.",".GGgGgGG..","..GGGGG...","...kkk....","..kkkkk...",".kooooook.",".kooooook.","..kooook.."]);
+def('book2',["kkkkkkkkkk","kbbbbbbbbk","kwwwwwwwwk","krrrrrrrrk","kwwwwwwwwk","kyyyyyyyyk","kkkkkkkkkk"]);
+def('cup',["...r...","..r....","kkkkkkk","kwwwwwk","kooooook","kooooook",".kooook.","..kkk.."]);
+const TL_ICONS=['bed','bus','phone','boss','bowl','coffee','cake','house','beer','heart','bag','moon'];
+const TL_LABELS=['Thức dậy','Đi làm','Sự cố','Sếp nhắn','Ăn trưa','Buồn ngủ','Đóng quỹ','Về nhà','Xã giao','Cơ thể','Cám dỗ','Kết thúc'];
+
+/* ---------- nhân vật chibi (đối xứng, ghép từ nửa trái) ---------- */
+const mir=h=>h+[...h].reverse().join('');
+const HEAD=["........kkkk","......kkHHHH","....kkHHhhHH","...kHHhhHHHH","..kHHHhHHHHH","..kHHHHHHHHH",".kHHHHHHHHHH",".kHHHHHHHHHH",".kHHHHHHHHHH",".kHHsHHHsHHs",".kHsssssssss",".kHsseesssss",".kHsswesssss",".kHsseessbbs",".kHssssssbbs",".kHsssssssmm","..kHssssssss","...kkSssssss","......kkkkkk"].map(mir);
+const BODY=["......ss","...kkttt","..kttttt",".ktttttl",".ktttttl",".kttttyy",".kttttyy",".kttttTT"].map(mir);
+HEAD.forEach((r,i)=>{if(r.length!==24)console.error('HEAD row',i,r.length)});BODY.forEach((r,i)=>{if(r.length!==16)console.error('BODY row',i,r.length)});
+const CHAR={
+  hero:{H:'#6b3f1d',h:'#8f5a2c',t:'#f6f3ea',T:'#d6d0bf',style:'messy',phones:true},
+  girl1:{H:'#3a2a3f',h:'#5d4866',t:'#e9e5f2',T:'#c8c1d8',style:'bun'},
+  girl2:{H:'#8a5a3a',h:'#ad774e',t:'#ffd438',T:'#e2b21c',style:'long'},
+  boss:{H:'#4a3020',h:'#6b4a33',t:'#f8f8f8',T:'#cfd4de',style:'boss',glasses:true}};
+function drawChibi(cx,top,ch,o={}){
+  const P=o.P||4,f=o.f||0,ph=o.ph||0,bob=(Math.floor((f+ph)/5)%2)*(P/2|0);
+  const hx=cx-12*P,hy=top+bob,bx=cx-8*P,extra=o.bodyExtra||0;
+  const map={k:'#2a2036',H:ch.H,h:ch.h,s:'#ffd9b0',S:'#f0b98c',b:'#ff9a9a',e:'#33232b',w:'#ffffff',m:'#b24a55',M:'#7d1f35',t:ch.t,T:ch.T,l:'#f4a915',y:'#ffd438'};
+  const fg=(x0,y0,gx,gy,gw,gh,col)=>{ctx.fillStyle=col;ctx.fillRect(x0+gx*P,y0+gy*P,gw*P,gh*P)};
+  const blob=(gx,gy,gw,gh,col)=>{fg(hx,hy,gx-1,gy-1,gw+2,gh+1,'#2a2036');fg(hx,hy,gx,gy,gw,gh,col)};
+  if(ch.style==='long'){fg(hx,hy,0,10,1,16,'#2a2036');fg(hx,hy,1,10,3,15,ch.H);fg(hx,hy,1,25,3,1,'#2a2036');fg(hx,hy,23,10,1,16,'#2a2036');fg(hx,hy,20,10,3,15,ch.H);fg(hx,hy,20,25,3,1,'#2a2036')}
+  // thân
+  const by=hy+19*P,rows=[...BODY.slice(0,5)];for(let i=0;i<extra;i++)rows.push(BODY[4]);rows.push(...BODY.slice(5));
+  rows.forEach((row,r)=>{for(let c=0;c<16;c++){const k=row[c];if(k==='.')continue;ctx.fillStyle=map[k]||CM[k];ctx.fillRect(bx+c*P,by+r*P,P,P)}});
+  // đầu
+  HEAD.forEach((row,r)=>{for(let c=0;c<24;c++){const k=row[c];if(k==='.')continue;ctx.fillStyle=map[k];ctx.fillRect(hx+c*P,hy+r*P,P,P)}});
+  if(ch.style==='messy'){blob(5,-2,4,2,ch.H);blob(10,-3,5,3,ch.H);blob(16,-2,4,2,ch.h)}
+  if(ch.style==='bun'){blob(1,-3,7,4,ch.H);fg(hx,hy,3,-2,2,1,ch.h)}
+  if(ch.phones){for(const sx of[0,21]){fg(hx,hy,sx-0,10,3,1,'#2a2036');fg(hx,hy,sx,17,3,1,'#2a2036');fg(hx,hy,sx===0?-1:24,10,1,8,'#2a2036');fg(hx,hy,sx,11,3,6,'#5d6577');fg(hx,hy,sx+1,12,1,4,'#8a93a8')}}
+  if(ch.glasses){for(const sx of[4,16]){fg(hx,hy,sx,10,4,1,'#2a2036');fg(hx,hy,sx,14,4,1,'#2a2036');fg(hx,hy,sx,10,1,5,'#2a2036');fg(hx,hy,sx+3,10,1,5,'#2a2036')}fg(hx,hy,8,11,8,1,'#2a2036')}
+  const clearEyes=()=>{for(const sx of[4,16])fg(hx,hy,sx,10,4,5,'#ffd9b0')};
+  const eyes=o.eyes||'open';
+  if(eyes==='happy'){clearEyes();for(const sx of[4,16]){fg(hx,hy,sx,12,1,1,'#2a2036');fg(hx,hy,sx+1,11,2,1,'#2a2036');fg(hx,hy,sx+3,12,1,1,'#2a2036')}}
+  else if(eyes==='tired'||eyes==='sleep'){clearEyes();for(const sx of[5,17]){fg(hx,hy,sx,12,2,1,'#2a2036');fg(hx,hy,sx,13,2,1,'#f0b98c')}}
+  else if(eyes==='wow'){for(const sx of[5,17])fg(hx,hy,sx,11,2,3,'#ffffff'),fg(hx,hy,sx,12,1,1,'#33232b')}
+  const mo=o.mouth||'smile',clr=()=>fg(hx,hy,9,15,6,2,'#ffd9b0');
+  if(mo==='open'){clr();fg(hx,hy,10,15,4,2,'#7d1f35');fg(hx,hy,11,16,2,1,'#ff7296')}
+  else if(mo==='flat'){clr();fg(hx,hy,10,16,4,1,'#b24a55')}
+  else if(mo==='sad'){clr();fg(hx,hy,11,15,2,1,'#b24a55');fg(hx,hy,10,16,1,1,'#b24a55');fg(hx,hy,13,16,1,1,'#b24a55')}
+  else if(mo==='o'){clr();fg(hx,hy,11,15,2,2,'#7d1f35')}
+  if(o.sweat){fg(hx,hy,22,6,2,3,'#7fd0ff');fg(hx,hy,22,5,1,1,'#7fd0ff')}
+  return {hx,hy,by}}
+function legs(cx,y,f,col='#3b4a7a'){const st=Math.floor(f/3)%2;for(const s of[-1,1]){const lift=(st===(s>0?0:1))?-4:0;Rp(cx+s*14-6,y+lift,12,20,'#2a2036');Rp(cx+s*14-4,y+lift,8,18,col);Rp(cx+s*14-8,y+lift+16,16,6,'#2a2036');Rp(cx+s*14-6,y+lift+16,12,4,'#ffffff')}}
+
+/* ---------- bảng màu theo thời điểm ---------- */
+const TIMES={
+  morning:{sky:['#79c8ff','#a6dcff','#cfeeff','#eaf8ff'],far:'#9db8e0',near:'#7f95c4',sun:1,tint:null},
+  day:{sky:['#5db6ff','#86ccff','#b4e1ff','#dff3ff'],far:'#9bb4dc',near:'#7a90c0',tint:null},
+  evening:{sky:['#ff8a5b','#ffa877','#ffc995','#ffe3b8'],far:'#d79a8f',near:'#a06b86',tint:'rgba(255,130,50,.14)'},
+  night:{sky:['#0e1538','#1a2255','#2a3170','#3b4488'],far:'#1d2756',near:'#131b42',stars:1,moon:1,lit:1,tint:'rgba(8,12,44,.46)'}};
+const CFG=[
+ {p:'room',t:'morning',pose:'wake'},{p:'street',t:'morning',bus:1},{p:'office',t:'day',prop:'phone'},{p:'office',t:'day',boss:1},
+ {p:'office',t:'day',prop:'lunch'},{p:'office',t:'day',prop:'sleepy'},{p:'office',t:'day',prop:'cake'},{p:'street',t:'evening',rain:1},
+ {p:'street',t:'night',lamps:1},{p:'room',t:'night',pose:'tired'},{p:'room',t:'night',pose:'phone'},{p:'room',t:'night',pose:'sleep'}];
+const SK1=(()=>{const r=rng(7),b=[];let x=0;while(x<300){const w=5+Math.floor(r()*7),h=8+Math.floor(r()*26);b.push({x,w,h,t:r()});x+=w}return b})();
+const SK2=(()=>{const r=rng(21),b=[];let x=0;while(x<300){const w=8+Math.floor(r()*7),h=14+Math.floor(r()*36);b.push({x,w,h,t:r()});x+=w}return b})();
+
+function skyBox(x,y,w,h,tm,f,scroll=0){
+  const T=TIMES[tm];ctx.save();ctx.beginPath();ctx.rect(x*S,y*S,w*S,h*S);ctx.clip();
+  T.sky.forEach((c,i)=>R(x,y+Math.floor(i*h/4),w,Math.ceil(h/4)+1,c));
+  if(T.stars){const r=rng(5);for(let i=0;i<34;i++){const sx=x+r()*w,sy=y+r()*h*.6;if((i+Math.floor(f/6))%7)R(Math.floor(sx),Math.floor(sy),1,1,'#fff6c8')}}
+  if(T.sun)disc(x+Math.floor(w*.78),y+9,5,'#fff2a0');
+  if(T.moon){disc(x+Math.floor(w*.8),y+10,5,'#fff8d6');disc(x+Math.floor(w*.8)+2,y+9,4,T.sky[1])}
+  if(!T.stars)for(let i=0;i<3;i++){const cx=x+((i*52+f*.22)%(w+30))-14,cy=y+8+i*7;R(Math.floor(cx),cy,14,3,'#ffffffcc'.slice(0,7));R(Math.floor(cx)+3,cy-2,8,2,'#ffffff')}
+  const off=Math.floor(scroll)%300;
+  for(const b of SK1){let bx=x+b.x-off;if(bx<x-14)bx+=300;if(bx>x+w)continue;R(bx,y+h-b.h,b.w,b.h,T.far)}
+  for(const b of SK2){let bx=x+b.x*1-off*1.6;bx=((bx-x)%300+300)%300+x-14;if(bx>x+w)continue;R(Math.floor(bx),y+h-b.h,b.w,b.h,T.near);
+    for(let wy=y+h-b.h+2;wy<y+h-2;wy+=4)for(let wx=Math.floor(bx)+2;wx<bx+b.w-1;wx+=3){if(T.lit&&((wx*7+wy*13)%5<3))R(wx,wy,1,2,'#ffd86b')}}
+  ctx.restore()}
+
+/* ---------- CẢNH VĂN PHÒNG ---------- */
+function sceneOffice(c,f,idx){
+  R(0,0,240,100,'#dfe5f3');R(0,0,240,3,'#c9d2e8');R(0,86,240,14,'#cdd6ea');R(0,86,240,1,'#b9c4de');
+  R(0,100,240,35,'#e6cfa6');for(let i=0;i<13;i++)R(i*20-6,100,1,35,'#d6b98a');R(0,100,240,2,'#bda071');
+  skyBox(5,12,96,58,c.t,f);R(3,10,100,2,'#5b6b94');R(3,70,100,3,'#5b6b94');for(let i=0;i<5;i++)R(3+i*24,10,2,63,'#5b6b94');R(3,40,100,2,'#5b6b94');R(5,73,96,2,'#aab6d6');
+  R(66,4,80,3,'#ffffff');R(66,7,80,1,'#c7d6f5');R(60,2,92,1,'#ecf2ff');
+  // bóng bay
+  const bal=['#f5c542','#ffffff','#ffe58a','#e8b020','#fff8e0'];
+  for(let i=0;i<12;i++){const a=Math.PI*(1.02+i*.085),bx=Math.round(128+Math.cos(a)*34),by=Math.round(46+Math.sin(a)*30+Math.sin((f+i*3)/9)*1);disc(bx,by,5,i%2?'#d8aa2b':'#c9ccd6');disc(bx,by,4,bal[i%5]);R(bx-2,by-3,2,1,'#ffffffcc'.slice(0,7));R(bx-3,by-2,1,2,'#ffffff')}
+  // cây to bên trái & phải
+  const bigPlant=(px,py,sc)=>{spr('plant',px*S,py*S,sc)};bigPlant(0,52,10);bigPlant(214,50,10);
+  // bàn nền + đồng nghiệp nhỏ
+  R(0,92,240,3,'#b88a5e');R(0,95,240,5,'#9a6e48');
+  // nhân vật
+  const hero=c.prop==='sleepy'?{eyes:'tired',mouth:'flat'}:c.prop==='cake'||c.prop==='lunch'?{eyes:'happy',mouth:'open'}:c.prop==='phone'?{eyes:'wow',mouth:'o',sweat:1}:{eyes:'wow',mouth:'o',sweat:1};
+  const g1={eyes:'happy',mouth:'smile'},g2={eyes:'happy',mouth:'open'};
+  drawChibi(110,266,CHAR.girl1,{f,ph:0,...g1});
+  drawChibi(260,270,CHAR.hero,{f,ph:2,...hero});
+  if(c.boss){drawChibi(380,236,CHAR.boss,{f,ph:1,bodyExtra:11,eyes:'open',mouth:'open'})}
+  drawChibi(500,268,CHAR.girl2,{f,ph:3,...g2});
+  // bàn tiền cảnh
+  R(0,98,240,3,'#f3d19a');R(0,101,240,2,'#d9ae72');R(0,103,240,12,'#b9855a');R(0,103,240,1,'#8f6240');R(0,114,240,1,'#8f6240');
+  for(let i=0;i<8;i++)R(i*34+4,106,1,8,'#a5744d');
+  // laptop (mặt lưng, logo A)
+  const laptop=(lx)=>{Rp(lx,352,140,46,'#4a4f5d');Rp(lx+4,356,132,38,'#8c919e');Rp(lx+4,356,132,4,'#a5aab6');Rp(lx-8,394,156,6,'#6b707d');spr('A',lx+58,364,5,{y:'#ffd438'})};
+  laptop(190);laptop(430);laptop(24);
+  // đồ vật trên bàn
+  spr('cup',372,352,5);spr('book2',60,382,3);spr('book2',66,370,3);spr('plant',352,366,2);
+  const cy=Math.floor(f/8)%2;spr('cat',146,336+cy,5);
+  if(c.prop==='phone'){Rp(300,368,34,52,'#2a2036');Rp(303,371,28,46,'#cfd6e8');Rp(307,378,20,8,'#e8344a');Rp(309,380,6,4,'#fff');spr('bolt',311,392,3)}
+  if(c.prop==='lunch'){for(const[lx,col]of[[300,'#d9a066'],[360,'#e8c27a'],[40,'#c88a5a']]){Rp(lx,372,48,22,'#2a2036');Rp(lx+3,375,42,16,col);Rp(lx+6,378,10,6,'#6bd88e');Rp(lx+20,378,12,6,'#ff9a5a');const sy=Math.floor(f/4)%3;Rp(lx+12,362-sy*2,3,8,'#ffffffaa'.slice(0,7));Rp(lx+26,358+sy*2,3,8,'#ffffff')}}
+  if(c.prop==='cake'){spr('cake',296,350,7);const fl=Math.floor(f/3)%2;Rp(312+0,344-fl,3,6,'#ffd438');Rp(330,344-(1-fl),3,6,'#ffd438');Rp(348,344-fl,3,6,'#ffd438')}
+  if(c.prop==='sleepy'){for(let i=0;i<3;i++){const t=((f/4+i*3)%9);T('Z',276+i*18+t*2,288-i*18-t*3,16+i*8,'#ffffff','left','#2a2036')}}}
+
+/* ---------- CẢNH PHÒNG ---------- */
+function sceneRoom(c,f,idx){
+  const night=c.t==='night',wall=night?'#c9b6a0':'#ecd9c3';
+  R(0,0,240,100,wall);for(let i=0;i<24;i++)R(i*10,0,1,100,night?'#bda68e':'#e0cab1');R(0,84,240,16,night?'#b79f86':'#dcc4a8');R(0,84,240,2,'#a58a70');
+  R(0,100,240,35,'#a8744a');for(let i=0;i<9;i++)R(0,100+i*4,240,1,'#94623c');for(let i=0;i<14;i++)R((i*17)%240,100+(i%9)*4,1,4,'#94623c');
+  // cửa sổ + rèm
+  skyBox(88,14,44,46,night?'night':'morning',f);R(86,12,48,2,'#fff');R(86,60,48,3,'#fff');R(86,12,2,51,'#fff');R(132,12,2,51,'#fff');R(108,14,2,46,'#fff');R(86,36,48,2,'#fff');
+  R(76,8,12,58,'#ff9db5');R(78,8,2,58,'#ffb6c9');R(82,8,2,58,'#ffb6c9');R(134,8,12,58,'#ff9db5');R(136,8,2,58,'#ffb6c9');R(140,8,2,58,'#ffb6c9');R(72,6,78,3,'#8a5a3a');
+  // poster
+  R(10,14,24,28,'#2a2036');R(11,15,22,26,'#79c8ff');R(11,31,22,10,'#6a7fb0');for(let i=0;i<5;i++)R(12+i*4,26+(i%2)*3,3,10,'#4b5f95');
+  // đệm / bàn đầu giường
+  R(2,56,6,46,'#8a5a3a');R(2,56,6,2,'#a97649');
+  // nhân vật trên giường
+  const pose=c.pose,eyes=pose==='sleep'?'sleep':pose==='tired'?'tired':pose==='phone'?'open':'happy';
+  const mouth=pose==='sleep'?'flat':pose==='tired'?'sad':pose==='phone'?'smile':'open';
+  R(10,56,30,12,'#ffffff');R(10,56,30,2,'#e9edf7');                                    // gối
+  drawChibi(130,pose==='sleep'?226:204,CHAR.hero,{f,ph:2,eyes,mouth,P:5,bodyExtra:0});
+  // chăn
+  R(6,78,86,26,'#5aa1ee');R(6,78,86,3,'#8cc2ff');for(let i=0;i<8;i++)R(10+i*10,81,4,23,'#4a8fdc');R(6,104,86,2,'#2b5fbf');R(4,76,2,30,'#2a2036');R(6,76,86,2,'#2a2036');
+  if(pose==='phone'){Rp(300,330,26,40,'#2a2036');Rp(302,332,22,36,'#d9f3ff');spr('bag',304,336,2)}
+  if(pose==='sleep'||pose==='tired')for(let i=0;i<3;i++){const t=((f/4+i*3)%9);if(pose==='sleep')T('Z',350+i*18+t*2,230-i*16-t*3,16+i*8,'#ffffff','left','#2a2036')}
+  // bàn đêm + đèn
+  R(2,98,0,0,'#000');R(96,82,18,22,'#8a5a3a');R(96,82,18,2,'#a97649');R(100,86,10,6,'#6e4528');R(100,94,10,6,'#6e4528');
+  R(101,70,8,3,'#ffd438');R(104,73,2,9,'#6b6f7d');R(98,64,14,7,night?'#ffe58a':'#fff3b0');
+  // bàn học
+  R(122,86,24,3,'#c58f5a');R(124,89,2,15,'#8a5a3a');R(142,89,2,15,'#8a5a3a');R(128,78,12,8,'#2a2036');R(129,79,10,6,night?'#6ac2ff':'#9fd8ff');
+  R(0,60,0,0,'#000');spr('plant',4*S,66*S+0,6);
+  // thảm
+  R(24,112,70,16,'#7d5fb0');R(26,114,66,12,'#9a7dd0');for(let i=0;i<9;i++)R(30+i*7,116,3,8,'#b79bf0');
+  if(night){ctx.fillStyle='rgba(8,12,44,.46)';ctx.fillRect(0,0,W,H);
+    for(const[r,a]of[[46,.05],[34,.07],[24,.09],[14,.12]]){ctx.fillStyle=`rgba(255,226,140,${a})`;const cx=105*S,cy=70*S;for(let y=-r;y<=r;y++){const w=Math.floor(Math.sqrt(r*r-y*y)+.5);ctx.fillRect(cx-w*S,cy+y*S,w*2*S,S)}}
+    R(98,64,14,7,'#ffe58a')}}
+
+/* ---------- CẢNH ĐƯỜNG PHỐ ---------- */
+function sceneStreet(c,f,idx){
+  const T_=TIMES[c.t];
+  skyBox(0,0,240,70,c.t,f,f*.05);
+  // dãy nhà ven đường
+  const shop=['#e9b872','#cf8f8f','#8fb4cf','#9fcf9a','#d9c38f'],r=rng(11);
+  for(let i=0;i<9;i++){const bx=i*28-4,h=34+Math.floor(r()*14),col=shop[i%5];
+    R(bx,92-h,26,h,c.t==='night'?'#232c58':col);R(bx,92-h,26,3,c.t==='night'?'#161d44':'#00000022'.slice(0,7)&&'#7d6a5a');
+    for(let wy=92-h+6;wy<80;wy+=9)for(let wx=bx+3;wx<bx+23;wx+=8){R(wx,wy,5,5,T_.lit&&((wx+wy)%3)?'#ffd86b':'#bfe0ff');R(wx,wy+5,5,1,'#5b6b94')}
+    R(bx,82,26,10,c.t==='night'?'#3b2a4a':['#d9544a','#4a8fdc','#e8a020'][i%3]);for(let s=0;s<13;s++)if(s%2)R(bx+s*2,82,2,10,'#ffffff55'.slice(0,7)&&'#f6f1e6');
+    R(bx+8,86,10,6,'#2a2036')}
+  // vỉa hè + đường
+  R(0,92,240,13,'#c9c5cf');R(0,92,240,2,'#e4e0ea');for(let i=0;i<20;i++)R(i*12,98,1,7,'#b3afbb');R(0,105,240,2,'#8d8a96');
+  R(0,107,240,28,'#4b4f5f');R(0,107,240,1,'#5f6376');
+  const dash=Math.floor(f*1.5)%24;for(let i=-1;i<11;i++)R(i*24-dash+24,121,12,2,'#e8e4d0');
+  // xe buýt / xe cộ
+  const bx=((f*3)%330)-70;
+  if(c.bus||c.rain||c.lamps){const col=c.lamps?'#3a6fb8':'#2e8f5a';R(bx,108,56,22,col);R(bx,108,56,3,'#ffffff55'.slice(0,7)&&'#e8f2ff');
+    for(let i=0;i<5;i++)R(bx+3+i*10,111,7,7,c.lamps?'#ffe58a':'#bfe8ff');R(bx,120,56,3,'#ffd438');R(bx+50,111,5,9,'#bfe8ff');
+    for(const wx of[8,40]){disc(bx+wx,130,4,'#2a2036');disc(bx+wx,130,2,'#9aa3b5')}
+    if(c.lamps){R(bx+56,118,4,3,'#fff6c0')}}
+  // trụ đèn / cây / biển trạm
+  if(c.lamps){for(const lx of[30,100,170,226]){R(lx,52,2,42,'#2a2036');R(lx-5,50,12,3,'#2a2036');R(lx-4,53,10,2,'#ffe58a')}}
+  else{for(const tx_ of[16,150]){R(tx_,70,3,24,'#6e4528');disc(tx_+1,66,9,'#3aa56a');disc(tx_-3,70,6,'#2e8f5a');disc(tx_+6,70,6,'#46b878')}}
+  if(idx===1){R(206,64,2,30,'#6b6f7d');R(198,58,18,10,'#2e7dd7');R(199,59,16,8,'#ffffff');R(202,62,10,2,'#2e7dd7')}
+  // nhân vật đi bộ
+  const bob=Math.floor(f/3)%2*2;
+  legs(260,364-bob,f);
+  drawChibi(260,258-bob+(0),CHAR.hero,{f:f+3,ph:0,eyes:c.rain?'tired':'open',mouth:c.rain?'sad':'smile',sweat:c.rain?1:0});
+  if(c.t==='evening'){}
+  if(c.rain){ctx.fillStyle='rgba(60,70,110,.20)';ctx.fillRect(0,0,W,H);
+    const rr=rng(3);for(let i=0;i<90;i++){const x=(rr()*W+f*5)%W,y=(rr()*H+f*34)%H;Rp(x,y,2,12,'#d4e6ff');Rp(x-2,y+10,2,4,'#d4e6ff')}}}
+
+function drawScene(idx,f){
+  const c=CFG[idx];
+  if(c.p==='office')sceneOffice(c,f,idx);else if(c.p==='room')sceneRoom(c,f,idx);else sceneStreet(c,f,idx);
+  const T_=TIMES[c.t];if(T_.tint&&c.p!=='room'){ctx.fillStyle=T_.tint;ctx.fillRect(0,0,W,H)}
+  // vignette đen mỏng phía trên để HUD nổi
+  const g=ctx.createLinearGradient(0,0,0,70);g.addColorStop(0,'rgba(10,16,40,.55)');g.addColorStop(1,'rgba(10,16,40,0)');ctx.fillStyle=g;ctx.fillRect(0,0,W,70)}
+
+/* ---------- UI: HUD ---------- */
+function hudPill(x,label,val,pct,ic,col){
+  panel(x,8,136,50,'#1c2748','#7186b8',{n:4,hi:'#2c3a66',sh:'#0a1020'});
+  spr(ic,x+8,8+Math.floor((50-sh(ic,3))/2)-3,3);
+  T(label,x+42,8+14,16,'#c5d0ee','left',null,86);T(val,x+42,8+31,22,'#ffffff','left',null,88);
+  Rp(x+10,8+40,116,6,'#0b1226');Rp(x+10,8+40,Math.round(116*clamp(pct)/100),6,col);Rp(x+10,8+40,Math.round(116*clamp(pct)/100),2,'#ffffff55'.slice(0,7)&&col);}
+function iconBtn(x,ic,act,key){
+  const hv=isHover(x,8);panel(x,8,42,42,hv?'#2c3a66':'#1c2748',hv?'#ffd438':'#7186b8',{n:4,hi:'#3a4a7c',sh:'#0a1020'});
+  spr(ic,x+Math.floor((42-sw(ic,3))/2),8+Math.floor((42-sh(ic,3))/2)-1,3);addHit(x,8,42,42,act)}
+function drawHUD(){
+  // logo
+  T('100K',14,26,40,'#ffd438','left','#2a2036');spr('coin',132,6,4);
+  T('SỐNG SÓT',16,52,16,'#ffffff','left','#2a2036');T('24 GIỜ',134,52,16,'#ff6a3d','left','#2a2036');
+  hudPill(232,'TIỀN',money(s.cash),s.cash/1000,'money','#51dc9c');
+  hudPill(374,'NĂNG LƯỢNG',s.energy+'/100',s.energy,'bolt','#ffd438');
+  hudPill(516,'SỨC KHỎE',s.health+'/100',s.health,'heart','#ff7296');
+  hudPill(658,'THẦN THÁI',s.social+'/100',s.social,'smile','#b19bff');
+  iconBtn(804,'book',()=>{ui='log'});iconBtn(850,'trophy',()=>{ui='profile'});iconBtn(896,'gear',()=>{ui='menu'})}
+
+/* ---------- UI: banner thời gian, bong bóng thoại ---------- */
+function drawBanner(ev){
+  panel(14,68,76,46,'#fffdf5','#2a2036',{n:4,sh:'#00000055'.slice(0,7)&&'#10162c'});
+  Rp(18,72,68,14,'#e8344a');Rp(28,66,6,10,'#2a2036');Rp(70,66,6,10,'#2a2036');Rp(29,67,4,8,'#ffffff');Rp(71,67,4,8,'#ffffff');
+  T(ev.time,52,100,19,'#2a2036','center');
+  const title=clean(ev.title);let ts=20;while(ts>14&&mw(title,ts)>460)ts--;const w=mw(title,ts)+28;
+  panel(96,74,Math.min(w,500),36,'#ffd438','#2a2036',{n:4,hi:'#ffe98a',lo:'#e8a315',sh:'#10162c'});
+  T(title,110,92,ts,'#3a2412')}
+function bubble(text,x,bottom,w,tailX){
+  let size=18,rows=lines(text,w-32,size);while(rows.length>5&&size>14){size--;rows=lines(text,w-32,size)}const lh=size+5,h=rows.length*lh+26,y=bottom-h;
+  panel(x,y,w,h,'#fffdf5','#2a2036',{n:6,sh:'#10162c'});
+  rows.forEach((r,i)=>T(r,x+16,y+21+i*lh,size,'#2a2036'));
+  // đuôi bong bóng (bậc thang)
+  const tx0=Math.max(x+20,Math.min(tailX,x+w-44));
+  for(let k=0;k<5;k++){const ww=24-k*4,xx=tx0+k*2;Rp(xx,bottom-2+k*4,ww,4,'#2a2036');Rp(xx+2,bottom-2+k*4,Math.max(0,ww-4),4,'#fffdf5')}
+  Rp(tx0+2,bottom-4,20,4,'#fffdf5');
+  // tia sáng nhỏ
+  Rp(x+w-6,y-10,4,10,'#ffd438');Rp(x+w+6,y-6,4,10,'#ffd438');Rp(x-10,y+2,10,4,'#ffd438')}
+
+/* ---------- UI: thẻ lựa chọn, chip chỉ số ---------- */
+const STAT={cash:{n:'Tiền',ic:'money'},energy:{n:'Năng lượng',ic:'bolt'},health:{n:'Sức khỏe',ic:'heart'},social:{n:'Thần thái',ic:'smile'},hunger:{n:'Độ đói',ic:'bowl',inv:1},bossTrust:{n:'Tin tưởng của sếp',ic:'boss'},coworkerTrust:{n:'Đồng nghiệp',ic:'smile'},phoneBattery:{n:'Pin điện thoại',ic:'phone'}};
+const kfmt=v=>{const a=Math.abs(v);return (v<0?'-':'+')+(a>=1000?(Math.round(a/100)/10).toString().replace('.0','')+'K':a)};
+function chipsOf(c){
+  const out=[];const net=(c.fx.cash||0)-c.cost;if(net)out.push({k:'cash',v:net,t:kfmt(net)});
+  const rest=['energy','health','social','bossTrust','hunger'].filter(k=>c.fx[k]).map(k=>({k,v:c.fx[k],t:(c.fx[k]>0?'+':'')+c.fx[k]})).sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
+  return out.concat(rest)}
+function chipCol(k,v){const good=STAT[k].inv?v<0:v>0;return good?'#14925a':'#d6304a'}
+function drawChips(chips,xr,y,h){chips.forEach((ch,i)=>{const cy=y+Math.round((i+.5)*h/chips.length),col=chipCol(ch.k,ch.v),w=mw(ch.t,20);
+  T(ch.t,xr,cy,20,col,'right');const ic=STAT[ch.k].ic;spr(ic,xr-w-sw(ic,2)-6,cy-Math.floor(sh(ic,2)/2),2)})}
+function card(x,y,w,h,num,title,hint,chips,enabled,hl,act){
+  const hv=enabled&&isHover(x,y),fill=!enabled?'#d9d4c8':(hv||hl)?'#ffe27d':'#fff4d9';
+  panel(x,y,w,h,fill,!enabled?'#6c6a73':'#2a2036',{n:6,hi:enabled?'#ffffffaa'.slice(0,7)&&'#fffbe9':null,lo:enabled?(hv?'#f2b92b':'#ecd9a8'):null,sh:'#10162c'});
+  panel(x+8,y+Math.floor((h-34)/2),34,34,enabled?'#ffd438':'#b9b5ab','#2a2036',{n:4});T(String(num),x+25,y+Math.floor(h/2),26,'#2a2036','center');
+  const tw=w-64-(chips.length?78:0),hasHint=!!hint;
+  let fs=17,rows=lines(title,tw,fs);
+  while(rows.length>2&&fs>13){fs--;rows=lines(title,tw,fs)}
+  const lh=fs+3,canHint=hasHint&&rows.length<=2&&h>=67;
+  const blockH=rows.length*lh+(canHint?17:0),firstY=y+(h-blockH)/2+lh/2;
+  rows.forEach((r,i)=>T(r,x+52,firstY+i*lh,fs,enabled?'#2a2036':'#85838b'));
+  if(canHint)T(hint,x+52,firstY+rows.length*lh+2,12,enabled?'#946526':'#b45d65','left',null,tw);
+  if(chips.length)drawChips(chips.slice(0,h>=72?3:2),x+w-12,y+8,h-16);
+  if(hv)spr('hand',x+w-34,y+h-26,3);
+  if(enabled)addHit(x,y,w,h,act)}
+
+/* ---------- panel bên phải: lựa chọn / kết quả / kết thúc ---------- */
+function drawRight(ev){
+  const X=592,Wd=350;
+  if(s.phase==='setupProfile'||s.phase==='setupFocus'){drawSetupRight();return;}
+  if(s.phase==='choice'){
+    panel(X+8,110,Wd-8,44,'#fffdf5','#2a2036',{n:6,sh:'#10162c'});T('Bạn sẽ làm gì?',X+26,133,23,'#2a2036');
+    Rp(X+Wd-8,102,4,12,'#ffd438');Rp(X+Wd+4,108,4,10,'#ffd438');
+    const cs=ev.choices(),top=166,bottom=442,gap=8,h=Math.min(78,Math.floor((bottom-top-gap*(cs.length-1))/cs.length));
+    cs.forEach((c,i)=>{const en=valid(c),y=top+i*(h+gap);
+      card(X,y,Wd,h,i+1,c.text,en?(c.hint||''):(c.cost>s.cash?'Không đủ tiền':'Không đủ điều kiện'),chipsOf(c),en,false,()=>{choose(c.id);save()})})
+  }else if(s.phase==='result'){
+    panel(X,128,Wd,226,'#fff4d9','#2a2036',{n:6,sh:'#10162c',hi:'#fffbe9'});T('KẾT QUẢ LỰA CHỌN',X+20,152,30,'#2a2036');Rp(X+16,168,Wd-32,2,'#e0c98e');
+    const d=s.last?.delta||{},ks=Object.keys(STAT).filter(k=>d[k]);
+    if(!ks.length)T('Không có chỉ số nào thay đổi.',X+20,196,20,'#7a6651');
+    ks.slice(0,7).forEach((k,i)=>{const y=190+i*23,v=d[k],txt=k==='cash'?(v>0?'+':'-')+money(Math.abs(v)):(v>0?'+':'')+v;
+      spr(STAT[k].ic,X+20,y-Math.floor(sh(STAT[k].ic,2)/2),2);T(STAT[k].n,X+48,y,18,'#2a2036');T(txt,X+Wd-20,y,20,chipCol(k,v),'right')});
+    const y=372,h=68,hv=isHover(X,y);
+    panel(X,y,Wd,h,hv?'#ffe27d':'#ffd438','#2a2036',{n:6,sh:'#10162c',hi:'#fff2a8',lo:'#e8a315'});
+    T('TIẾP TỤC',X+Wd/2-14,y+h/2-8,32,'#2a2036','center');T('Đến tình huống tiếp theo',X+Wd/2-14,y+h/2+18,16,'#8a5a14','center');
+    spr('arrow',X+Wd-56,y+h/2-14,4);if(hv)spr('hand',X+Wd-46,y+h-26,3);addHit(X,y,Wd,h,()=>{advance();save()})
+  }else{
+    const e=ending(),title=clean(e[0]);
+    panel(X,124,Wd,214,'#fff4d9','#2a2036',{n:6,sh:'#10162c',hi:'#fffbe9'});T('KẾT THÚC NGÀY',X+20,146,20,'#a8670f');
+    const n=WT(title,X+20,180,Wd-40,30,30,'#2a2036','left',null,2);Rp(X+16,180+n*30-4,Wd-32,2,'#e0c98e');
+    const sts=[['money',money(s.cash)],['bolt',s.energy+'/100'],['heart',s.health+'/100'],['smile',s.social+'/100']];
+    sts.forEach(([ic,v],i)=>{const cx=X+22+(i%2)*160,cy=180+n*30+24+Math.floor(i/2)*30;spr(ic,cx,cy-Math.floor(sh(ic,2)/2),2);T(v,cx+30,cy,20,'#2a2036')});
+    const mk=(y,h,label,sub,hl,act)=>{const hv=isHover(X,y);panel(X,y,Wd,h,hv?'#ffe27d':(hl?'#ffd438':'#fffdf5'),'#2a2036',{n:6,sh:'#10162c',hi:'#fff6c4',lo:hl?'#e8a315':'#ecd9a8'});T(label,X+Wd/2,y+h/2-(sub?8:0),28,'#2a2036','center');if(sub)T(sub,X+Wd/2,y+h/2+16,16,'#8a5a14','center');if(hv)spr('hand',X+Wd-46,y+h-24,3);addHit(X,y,Wd,h,act)};
+    mk(346,52,'CHƠI LẠI','Bắt đầu một ngày mới',true,()=>{s=base();s.phase='setupProfile';save()});
+    mk(404,36,'SAO CHÉP KẾT QUẢ','',false,()=>{const text='100K – Sống sót 24 giờ\n'+e[0]+'\n💵 '+money(s.cash)+' · ⚡ '+s.energy+' · ❤️ '+s.health;navigator.clipboard?.writeText?.(text).catch(()=>window.prompt('Sao chép:',text))||window.prompt('Sao chép:',text)})}}
+
+
+function drawSetupRight(){
+ const X=592,Wd=350;
+ panel(X,110,Wd,45,'#fffdf5','#2a2036',{n:6});T(s.phase==='setupProfile'?'BẠN LÀ AI HÔM NAY?':'CHỌN CHIẾN LƯỢC',X+18,133,20,'#2a2036');
+ const opts=s.phase==='setupProfile'?PROFILES:FOCUSES;
+ opts.forEach((p,i)=>{const y=166+i*69,h=62,hv=isHover(X,y);panel(X,y,Wd,h,hv?'#ffe27d':'#fff4d9','#2a2036',{n:5,hi:'#fffbe9'});T((i+1)+'. '+p.name,X+14,y+19,18,'#2a2036','left',null,316);WT(p.desc,X+14,y+44,318,12,14,'#765b48','left',null,2);addHit(X,y,Wd,h,()=>{if(s.phase==='setupProfile')initProfile(p.id);else initFocus(p.id)})});
+}
+
+/* ---------- UI: hành trình ---------- */
+function drawTimeline(){
+  panel(8,452,944,80,'#1a2548','#5c6f9e',{n:6,hi:'#2a3868',sh:'#080e1e'});
+  panel(18,460,118,64,'#101a38','#3b4b78',{n:4});
+  T('Hành trình',77,474,13,'#e9edf7','center');spr('calendar',28,488,2);T((s.index+1)+'/12',70,504,21,'#ffd438');
+  const x0=150,step=66,cx=i=>x0+i*step+33;
+  Rp(cx(0),492,cx(11)-cx(0),4,'#34456f');Rp(cx(0),492,cx(Math.min(s.index,11))-cx(0),4,'#51dc9c');
+  for(let i=0;i<12;i++){
+    const done=i<s.index,cur=i===s.index,x=cx(i),ic=TL_ICONS[i];
+    if(cur){panel(x-31,455,62,74,'#2d2a1c','#ffd438',{n:4,bw:2})}
+    spr(ic,x-Math.floor(sw(ic,2)/2),462,2);
+    if(done){Rp(x-5,489,10,10,'#17302c');spr('check',x-7,490,2)}else if(cur){Rp(x-5,488,10,10,'#ffd438');Rp(x-3,490,6,6,'#ffffff')}else{Rp(x-4,489,8,8,'#8ea0c8');Rp(x-2,491,4,4,'#34456f')}
+    T(events[i].time,x,508,13,cur?'#ffd438':done?'#e9edf7':'#c5d0ee','center');T(TL_LABELS[i],x,523,11,cur?'#ffffff':'#9fb0d6','center',null,62)}}
+
+/* ---------- Modal: nhật ký / danh hiệu / menu ---------- */
+function drawModal(){
+  ctx.fillStyle='rgba(6,10,30,.66)';ctx.fillRect(0,0,W,H);
+  const X=170,Y=96,Wd=620,Hd=340;
+  addHit(0,0,W,H,()=>{ui=null});          // bấm ngoài để đóng
+  hit.length=0;addHit(0,0,W,H,()=>{ui=null});
+  panel(X,Y,Wd,Hd,'#fff4d9','#2a2036',{n:8,sh:'#10162c',hi:'#fffbe9'});
+  addHit(X,Y,Wd,Hd,()=>{});
+  const title=ui==='log'?'NHẬT KÝ NGÀY HÔM NAY':ui==='trophy'?'DANH HIỆU HIỆN TẠI':ui==='profile'?'HỒ SƠ & QUAN HỆ':'TẠM DỪNG';
+  T(title,X+24,Y+28,32,'#2a2036');Rp(X+20,Y+48,Wd-40,2,'#e0c98e');
+  if(ui==='log'){const rows=(s.memories||[]).map(m=>m.time+' · '+m.text).slice(0,8);if(!rows.length)T('Chưa có gì xảy ra. Hãy chọn một phương án!',X+24,Y+84,22,'#7a6651');
+    let y=Y+78;rows.forEach(r=>{const n=WT(r,X+24,y,Wd-48,20,20,'#2a2036','left',null,2);y+=n*20+8})}
+  else if(ui==='profile'){T(profile().name,X+24,Y+85,27,'#a8670f');WT(profile().desc,X+24,Y+116,Wd-48,20,23,'#2a2036','left',null,2);T('Chiến lược: '+(s.focus?focus().name:'chưa chọn'),X+24,Y+169,21,'#2a2036');T('Sếp: '+s.npc.boss+'/100   Đồng nghiệp: '+s.npc.friend+'/100',X+24,Y+208,21,'#2a2036');WT(profile().perk,X+24,Y+250,Wd-48,19,21,'#765b48','left',null,2)}
+  else if(ui==='trophy'){const e=ending();WT(e[0],X+24,Y+88,Wd-48,38,36,'#a8670f','left',null,2);WT(e[1],X+24,Y+150,Wd-48,22,24,'#2a2036','left',null,3);
+    T('Đã qua '+s.index+'/11 tình huống · tiền còn '+money(s.cash),X+24,Y+250,20,'#7a6651');T('Danh hiệu có thể thay đổi theo lựa chọn của bạn.',X+24,Y+276,18,'#7a6651')}
+  else{const bw=Wd-48;
+    const b=(y,label,act,hl)=>{const hv=isHover(X+24,y);panel(X+24,y,bw,56,hv?'#ffe27d':(hl?'#ffd438':'#fffdf5'),'#2a2036',{n:6,sh:'#10162c',lo:'#ecd9a8'});T(label,X+Wd/2,y+28,30,'#2a2036','center');addHit(X+24,y,bw,56,act)};
+    b(Y+80,'TIẾP TỤC CHƠI',()=>{ui=null},true);b(Y+150,'CHƠI LẠI TỪ ĐẦU',()=>{s=base();s.phase='setupProfile';save();ui=null},false);T('Tiến trình được tự động lưu trên trình duyệt này.',X+Wd/2,Y+250,18,'#7a6651','center')}
+  const cx=X+Wd-124,cy=Y+Hd-60,hv=isHover(cx,cy);panel(cx,cy,100,40,hv?'#ffe27d':'#fffdf5','#2a2036',{n:4,sh:'#10162c'});T('ĐÓNG',cx+50,cy+20,24,'#2a2036','center');addHit(cx,cy,100,40,()=>{ui=null})}
+
+/* ---------- vẽ toàn bộ ---------- */
+function render(){
+  hit.length=0;ctx.clearRect(0,0,W,H);ctx.imageSmoothingEnabled=false;
+  const idx=Math.min(s.index,CFG.length-1),ev=events[idx];
+  drawScene(idx,frame);
+  // bong bóng thoại
+  let msg,tailX,bx,bw=350,bottom;
+  if(s.phase==='setupProfile'){msg='Mỗi nhân viên đều có một xuất phát điểm khác nhau. Hôm nay bạn là ai?'}
+  else if(s.phase==='setupFocus'){msg='Bạn có 100.000 đồng và một ngày dài. Điều gì quan trọng nhất?'}
+  else if(s.phase==='result'){msg=s.last.outcome.msg}
+  else if(s.phase==='end'){msg=ending()[1]}
+  else{msg=typeof ev.desc==='function'?ev.desc():ev.desc}
+  if(CFG[idx].boss){bx=232;tailX=348;bottom=222}else{bx=110;tailX=236;bottom=236}
+  drawBanner(ev);bubble(msg,bx,bottom,bw,tailX);
+  drawRight(ev);drawTimeline();drawHUD();
+  if(ui)drawModal()}
+
+function pos(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*W/r.width,y:(e.clientY-r.top)*H/r.height}}
+const hitAt=p=>{for(let i=hit.length-1;i>=0;i--){const b=hit[i];if(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h)return b}return null};
+canvas.addEventListener('pointerdown',e=>{const h=hitAt(pos(e));if(h){h.action();render()}});
+canvas.addEventListener('pointermove',e=>{const h=hitAt(pos(e));hoverKey=h?h.key:'';canvas.style.cursor=h&&h.w<W?'pointer':'default'});
+canvas.addEventListener('pointerleave',()=>{hoverKey=''});
+addEventListener('keydown',e=>{
+  if(e.key==='Escape'){ui=null;render();return}
+  if(ui)return;
+  if((s.phase==='setupProfile'||s.phase==='setupFocus')&&/^[1-4]$/.test(e.key)){const idx=+e.key-1;if(s.phase==='setupProfile')initProfile(PROFILES[idx].id);else initFocus(FOCUSES[idx].id)}
+  else if(s.phase==='choice'&&/^[1-9]$/.test(e.key)){const c=events[s.index].choices()[+e.key-1];if(c&&valid(c)){choose(c.id);save();render()}}
+  else if(s.phase==='result'&&(e.key==='Enter'||e.key===' ')){e.preventDefault();advance();save();render()}});
+try{let old=JSON.parse(localStorage.getItem(saveKey)||'null');if(old&&Number.isInteger(old.index)&&old.index>=0&&old.index<events.length&&['choice','result','end','setupProfile','setupFocus'].includes(old.phase)){s={...base(),...old,npc:{...base().npc,...old.npc}};if(s.phase==='result'&&!s.last?.outcome)s.phase='choice'}}catch(e){}
+function save(){try{localStorage.setItem(saveKey,JSON.stringify(s))}catch(e){}}
+if(!s.profileId&&s.phase==='choice')s.phase='setupProfile';
+render();
+const startLoop=()=>{tcache.clear();render()};
+if(document.fonts?.ready)document.fonts.ready.then(startLoop)
+setInterval(()=>{frame++;render()},100);
+
+</script></body></html>
